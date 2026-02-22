@@ -101,6 +101,7 @@ function onCalendarEventUpdated(e) {
 /**************** MAIN AUTOMATION ****************/
 
 function syncMeasures() {
+  return safeExecute_("syncMeasures", function() {
   const lock = LockService.getScriptLock();
   lock.waitLock(LOCK_WAIT_MS);
 
@@ -410,6 +411,7 @@ function syncMeasures() {
   } finally {
     lock.releaseLock();
   }
+  });
 }
 
 /**************** LANE B HELPERS (NON-MEASURE CC ONLY) ****************/
