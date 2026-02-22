@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top" />
+    <style>
+      :root { --pad: 12px; --radius: 10px; }
+      body { font-family: Arial, sans-serif; margin: 0; padding: var(--pad); }
+      .card { border: 1px solid #e5e5e5; border-radius: var(--radius); padding: var(--pad); margin-bottom: 12px; }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .row > * { flex: 0 0 auto; }
+      h2 { font-size: 14px; margin: 0 0 8px 0; }
+      h3 { font-size: 13px; margin: 0 0 8px 0; }
+      .muted { color: #666; font-size: 12px; }
+      .pill { font-size: 11px; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 2px 8px; border-radius: 999px; }
+      .btn {
+        border: 1px solid #d1d5db; background: white; border-radius: 10px;
+        padding: 8px 10px; cursor: pointer; font-size: 12px;
+      }
+      .btn.primary { border-color: #2563eb; }
+      .btn.danger { border-color: #dc2626; }
+      .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      .grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+      .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .kv label { font-size: 11px; color: #444; display: block; margin-bottom: 4px; }
+      input, select {
+        width: 100%; box-sizing: border-box;
+        border: 1px solid #d1d5db; border-radius: 10px; padding: 8px; font-size: 12px;
+      }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { font-size: 12px; padding: 6px; border-bottom: 1px solid #eee; vertical-align: top; }
+      th { text-align: left; color: #444; font-size: 11px; }
+      .right { text-align: right; }
+      .status { font-size: 12px; white-space: pre-wrap; }
+      .ok { color: #065f46; }
+      .warn { color: #92400e; }
+      .err { color: #991b1b; }
+      details summary { cursor: pointer; font-size: 12px; color: #111; }
+      .tiny { font-size: 11px; color: #666; }
+      .spacer { height: 6px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="row" style="justify-content: space-between;">
+        <div>
+          <h2>LP Upload / Print</h2>
+          <div class="muted" id="subhead">Loading…</div>
+        </div>
+        <span class="pill" id="activeTabPill">…</span>
+      </div>
+
+      <div class="spacer"></div>
+
+      <div class="row">
+        <button class="btn primary" id="btnUploadCurrent" onclick="uploadCurrentTab()">Upload THIS Tab</button>
+        <button class="btn primary" id="btnUploadAll" onclick="uploadAllTabs()">Upload FULL Packet</button>
+        <button class="btn" id="btnRefresh" onclick="refreshLpAmounts()">Refresh LP Amounts</button>
+      </div>
+
+      <div class="spacer"></div>
+      <div class="status" id="status"></div>
+    </div>
+
+    <div class="card">
+      <h3>Tab → Doc Type Mapping (from CONFIG)</h3>
+      <div class="muted tiny">
+        This list is generated from your CONFIG keys. Add future document types/mappings below — no code changes.
+      </div>
+      <div class="spacer"></div>
+      <table id="mappingTable">
+        <thead>
+          <tr>
+            <th>Tab</th>
+            <th>LP Doc Type ID</th>
+            <th>Orientation</th>
+            <th class="right">Action</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <details>
+        <summary><b>Config Manager (Add/Update)</b> <span class="tiny">(future expansion)</span></summary>
+        <div class="spacer"></div>
+
+        <div class="grid">
+          <div class="kv">
+            <div>
+              <label>Tab Name (must match sheet tab exactly)</label>
+              <select id="cfgTab"></select>
+            </div>
+            <div>
+              <label>LP Doc Type ID</label>
+              <input id="cfgDocType" placeholder="e.g. 26" />
+            </div>
+          </div>
+
+          <div class="kv">
+            <div>
+              <label>Orientation</label>
+              <select id="cfgOrientation">
+                <option value="PORTRAIT">Portrait</option>
+                <option value="LANDSCAPE">Landscape</option>
+              </select>
+            </div>
+            <div>
+              <label>Notes (optional)</label>
+              <input id="cfgNotes" placeholder="e.g. WORK ORDER doc type" />
+            </div>
+          </div>
+
+          <div class="row">
+            <button class="btn" onclick="saveMapping()">Save Mapping</button>
+            <button class="btn danger" onclick="removeMapping()">Remove Mapping</button>
+          </div>
+
+          <div class="tiny muted">
+            Under the hood this writes:
+            <br/>• <code>LP_DOC_TYPE_{TAB}</code> = doc type id
+            <br/>• Updates <code>PRINT_LANDSCAPE_TABS</code> / <code>PRINT_PORTRAIT_TABS</code>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <script>
+      let MODEL = null;
+
+      function setStatus(msg, level) {
+        const el = document.getElementById("status");
+        el.className = "status " + (level || "");
+        el.textContent = msg || "";
+      }
+
+      function disableActions(disabled) {
+        ["btnUploadCurrent","btnUploadAll","btnRefresh"].forEach(id => {
+          const b = document.getElementById(id);
+          if (b) b.disabled = !!disabled;
+        });
+      }
+
+      function esc(s) {
+        return String(s || "").replace(/[&<>"']/g, c => ({
+          "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+        }[c]));
+      }
+
+      function render() {
+        if (!MODEL) return;
+
+        document.getElementById("subhead").textContent =
+          `Config: ${MODEL.configSheetName} • LP Base: ${MODEL.lpBaseUrl || "(not set)"}`;
+
+        document.getElementById("activeTabPill").textContent =
+          `Active: ${MODEL.activeTabName || "Unknown"}`;
+
+        // Populate tab dropdown for config manager
+        const tabSel = document.getElementById("cfgTab");
+        tabSel.innerHTML = "";
+        (MODEL.sheetTabs || []).forEach(t => {
+          const opt = document.createElement("option");
+          opt.value = t;
+          opt.textContent = t;
+          tabSel.appendChild(opt);
+        });
+        if (MODEL.activeTabName) tabSel.value = MODEL.activeTabName;
+
+        // Mapping table
+        const tbody = document.querySelector("#mappingTable tbody");
+        tbody.innerHTML = "";
+
+        const rows = (MODEL.mappings || []).slice().sort((a,b) => a.tab.localeCompare(b.tab));
+        if (!rows.length) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `<td colspan="4" class="muted">No mappings found in CONFIG yet.</td>`;
+          tbody.appendChild(tr);
+        } else {
+          rows.forEach(m => {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+              <td><b>${esc(m.tab)}</b></td>
+              <td>${esc(m.docTypeId || "")}</td>
+              <td>${esc(m.orientation || "")}</td>
+              <td class="right">
+                <button class="btn" onclick="uploadSingleTab('${esc(m.tab)}')">Upload</button>
+              </td>
+            `;
+            tbody.appendChild(tr);
+          });
+        }
+      }
+
+      function loadModel() {
+        disableActions(true);
+        setStatus("Loading sidebar model…");
+
+        google.script.run
+          .withSuccessHandler(model => {
+            MODEL = model;
+            render();
+            disableActions(false);
+            setStatus("Sidebar is wired correctly ✅  UI is live.\nNext: wire Upload + Refresh to LP API.", "ok");
+          })
+          .withFailureHandler(err => {
+            disableActions(false);
+            setStatus("Failed to load model:\n" + (err && err.message ? err.message : err), "err");
+          })
+          .getSidebarModel();
+      }
+
+      // ===== Actions (UI calls server stubs for now) =====
+
+      function refreshLpAmounts() {
+        disableActions(true);
+        setStatus("Refreshing LP amounts (Gross → D5, Balance → G5)…");
+
+        google.script.run
+          .withSuccessHandler(res => {
+            disableActions(false);
+            setStatus(res && res.message ? res.message : "Refresh complete.", "ok");
+          })
+          .withFailureHandler(err => {
+            disableActions(false);
+            setStatus("Refresh failed:\n" + (err && err.message ? err.message : err), "err");
+          })
+          .refreshLpAmounts();
+      }
+
+      function uploadCurrentTab() {
+        disableActions(true);
+        setStatus("Preparing upload for CURRENT tab…");
+
+        google.script.run
+          .withSuccessHandler(res => {
+            disableActions(false);
+            setStatus(res && res.message ? res.message : "Done.", "ok");
+          })
+          .withFailureHandler(err => {
+            disableActions(false);
+            setStatus("Upload failed:\n" + (err && err.message ? err.message : err), "err");
+          })
+          .uploadCurrentTab();
+      }
+
+      function uploadAllTabs() {
+        disableActions(true);
+        setStatus("Preparing upload for FULL packet (all mapped tabs)…");
+
+        google.script.run
+          .withSuccessHandler(res => {
+            disableActions(false);
+            setStatus(res && res.message ? res.message : "Done.", "ok");
+          })
+          .withFailureHandler(err => {
+            disableActions(false);
+            setStatus("Upload failed:\n" + (err && err.message ? err.message : err), "err");
+          })
+          .uploadAllTabs();
+      }
+
+      function uploadSingleTab(tabName) {
+        disableActions(true);
+        setStatus(`Preparing upload for tab: ${tabName}…`);
+
+        google.script.run
+          .withSuccessHandler(res => {
+            disableActions(false);
+            setStatus(res && res.message ? res.message : "Done.", "ok");
+          })
+          .withFailureHandler(err => {
+            disableActions(false);
+            setStatus("Upload failed:\n" + (err && err.message ? err.message : err), "err");
+          })
+          .uploadSingleTab(tabName);
+      }
+
+      // ===== Config Manager =====
+
+      function saveMapping() {
+        const tab = document.getElementById("cfgTab").value;
+        const docTypeId = document.getElementById("cfgDocType").value.trim();
+        const orientation = document.getElementById("cfgOrientation").value;
+        const notes = document.getElementById("cfgNotes").value.trim();
+
+        if (!tab) return setStatus("Pick a tab first.", "warn");
+        if (!docTypeId || !/^\d+$/.test(docTypeId)) return setStatus("Doc Type ID must be numeric.", "warn");
+
+        disableActions(true);
+        setStatus(`Saving mapping for ${tab}…`);
+
+        google.script.run
+          .withSuccessHandler(res => {
+            disableActions(false);
+            setStatus(res && res.message ? res.message : "Saved.", "ok");
+            loadModel(); // re-render
+          })
+          .withFailureHandler(err => {
+            disableActions(false);
+            setStatus("Save failed:\n" + (err && err.message ? err.message : err), "err");
+          })
+          .saveTabMapping({ tab, docTypeId, orientation, notes });
+      }
+
+      function removeMapping() {
+        const tab = document.getElementById("cfgTab").value;
+        if (!tab) return setStatus("Pick a tab first.", "warn");
+
+        disableActions(true);
+        setStatus(`Removing mapping for ${tab}…`);
+
+        google.script.run
+          .withSuccessHandler(res => {
+            disableActions(false);
+            setStatus(res && res.message ? res.message : "Removed.", "ok");
+            loadModel();
+          })
+          .withFailureHandler(err => {
+            disableActions(false);
+            setStatus("Remove failed:\n" + (err && err.message ? err.message : err), "err");
+          })
+          .removeTabMapping(tab);
+      }
+
+      loadModel();
+    </script>
+  </body>
+</html>
