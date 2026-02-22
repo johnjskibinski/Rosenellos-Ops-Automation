@@ -3,11 +3,16 @@
  * Creates/overwrites a hidden CONFIG sheet with non-secret settings.
  *
  * Run: setupMeasureTemplateConfig
+ *
+ * NOTE: This file expects Diagnostics.gs to exist in the same Apps Script project
+ * and provide safeExecute_(taskName, fn).
  */
 function setupMeasureTemplateConfig() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  upsertConfigSheet_(ss);
-  SpreadsheetApp.flush();
+  return safeExecute_("setupMeasureTemplateConfig", function () {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    upsertConfigSheet_(ss);
+    SpreadsheetApp.flush();
+  });
 }
 
 function upsertConfigSheet_(ss) {
@@ -85,5 +90,7 @@ function getOrCreateSheet_(ss, sheetName, indexZeroBased, clearAll) {
 }
 
 function _sanityCheck() {
-  Logger.log("Sanity check OK");
+  return safeExecute_("_sanityCheck", function () {
+    Logger.log("Sanity check OK");
+  });
 }
